@@ -107,6 +107,8 @@ def initialize_session_state() -> None:
         "selected_keys": [],
         "field_picker_labels": [],
         "user_inputs": {},
+        "editing_keys": set(),     # fields the user has reopened for editing
+        "confirmed_keys": set(),   # fields the user has explicitly saved
     }
 
     for key, value in defaults.items():
@@ -176,48 +178,69 @@ def search_fields_and_categories(
 
     return ordered
 
-
 def add_selected_fields_from_picker() -> None:
     """
-    Move user-selected labels from the multiselect picker into selected field keys.
+    Replace selected fields with current picker selection.
     """
+
+    selected_keys = []
+
     for label in st.session_state.field_picker_labels:
         key = ALL_LABEL_TO_KEY.get(label)
-        if key is not None and key not in st.session_state.selected_keys:
-            st.session_state.selected_keys.append(key)
+
+        if key is not None:
+            selected_keys.append(key)
+
+    st.session_state.selected_keys = selected_keys
+
+    # Reset save/edit states
+    st.session_state.confirmed_keys = set()
+    st.session_state.editing_keys = set()
 
     st.session_state.field_picker_labels = []
-
 
 def clear_all_selected_fields() -> None:
     """
-    Remove all selected fields while preserving the rest of the app state.
+    Reset all selected fields and their associated session state.
     """
+    # Remove widget state for every available field
+    for key in AVAILABLE_FIELDS:
+        st.session_state.pop(f"input_{key}", None)
+        st.session_state.pop(f"blank_{key}", None)
+
+    # Reset application state
     st.session_state.selected_keys = []
     st.session_state.field_picker_labels = []
     st.session_state.user_inputs = {}
-
+    st.session_state.confirmed_keys = set()
+    st.session_state.editing_keys = set()
 
 def gather_user_inputs(selected_keys: List[str]) -> Dict[str, Any]:
     """
-    Read the active widget values into a plain Python dictionary.
-    This is the single source of truth for model input collection.
+    Read saved summary values first, otherwise read widget values.
     """
+
     user_inputs: Dict[str, Any] = {}
 
     for key in selected_keys:
         field = AVAILABLE_FIELDS[key]
 
+        # Use edited summary value if available
+        if key in st.session_state.user_inputs:
+            user_inputs[key] = st.session_state.user_inputs[key]
+            continue
+
         if field["type"] == "number_optional":
+
             if st.session_state.get(f"blank_{key}", True):
                 user_inputs[key] = None
             else:
                 user_inputs[key] = st.session_state.get(f"input_{key}")
+
         else:
             user_inputs[key] = st.session_state.get(f"input_{key}")
 
     return user_inputs
-
 
 def build_raw_row(user_inputs: Dict[str, Any]) -> pd.DataFrame:
     """
@@ -250,49 +273,77 @@ def get_risk_band(probability: float) -> Tuple[str, str]:
     return "Very High", "🔴"
 
 
-def get_investor_decision_text(risk_band: str) -> str:
+def get_investor_decision_text(probability: float, threshold: float,) -> str:
     """
-    Convert risk band into an investor-facing decision label.
+    Compare predicted default probability with investor risk preference.
     """
-    if risk_band == "Low":
+
+    if probability <= threshold:
         return "Eligible for Consideration"
-    if risk_band == "Moderate":
-        return "Review"
-    if risk_band == "High":
-        return "Avoid"
-    if risk_band == "Very High":
-        return "Reject"
-    return "Review"
 
-def get_case_result_message(probability: float, threshold: float, risk_band: str) -> str:
+    return "Outside Investment Preference"
+
+def get_threshold_guidance(threshold: float) -> tuple[str, str, str]:
+    """
+    Return the investment strategy, explanation, and alert type
+    for the selected maximum default risk.
+    """
+
+    if threshold <= 0.15:
+        return (
+            "🟢 Very Cautious",
+            "Only borrowers with a low chance of default will be recommended. This approach prioritizes safety over the number of investment opportunities.",
+            "success",
+        )
+
+    elif threshold <= 0.25:
+        return (
+            "🟡 Balanced",
+            "A balance between safety and investment opportunities. Borrowers with a moderate chance of default may still be considered.",
+            "info",
+        )
+
+    elif threshold <= 0.40:
+        return (
+            "🟠 Growth-Focused",
+            "More borrowers will qualify, creating additional investment opportunities, but the risk of financial loss also increases.",
+            "warning",
+        )
+
+    return (
+        "🔴 Aggressive",
+        "Many borrowers will qualify, but there is a significantly higher chance of defaults and financial losses.",
+        "error",
+    )
+
+def get_case_result_message(
+    probability: float,
+    threshold: float,
+    risk_band: str,
+) -> tuple[str, str]:
+    """
+    Return a dynamic message based on the investor's selected risk threshold.
+    """
+
+    probability_pct = probability * 100
     threshold_pct = threshold * 100
+    difference_pct = abs(probability_pct - threshold_pct)
 
-    if risk_band == "Low":
+    if probability <= threshold:
         return (
-            f"This profile is below the selected {threshold_pct:.0f}% risk threshold "
-            f"and remains eligible for consideration."
+            "success",
+            f"This borrower is classified as {risk_band.lower()} risk with a predicted default probability of "
+            f"{probability_pct:.1f}%. This is {difference_pct:.1f} percentage points below your selected "
+            f"maximum risk threshold of {threshold_pct:.0f}%, so the application is within your investment preference."
         )
 
-    if risk_band == "Moderate":
-        return (
-            f"This profile falls into the moderate-risk range and should be reviewed "
-            f"more carefully before proceeding."
-        )
-
-    if risk_band == "High":
-        return (
-            f"This profile is in the high-risk range and is better treated as an avoid case "
-            f"under the current threshold."
-        )
-
-    if risk_band == "Very High":
-        return (
-            f"This profile is in the very high-risk range and should be treated as a reject case "
-            f"under the current threshold."
-        )
-
-    return f"This profile was evaluated against the selected {threshold_pct:.0f}% risk threshold."
-
+    return (
+        "warning",
+        f"This borrower is classified as {risk_band.lower()} risk with a predicted default probability of "
+        f"{probability_pct:.1f}%. This exceeds your selected maximum risk threshold of "
+        f"{threshold_pct:.0f}% by {difference_pct:.1f} percentage points, so it falls outside your current investment preference."
+    )
+    
 def estimate_profit_loss(
     user_inputs: Dict[str, Any],
     default_probability: float,
@@ -385,8 +436,8 @@ def plot_shap_bar(shap_df: pd.DataFrame):
 
 def get_top_drivers_rule_based(user_inputs: Dict[str, Any]) -> List[str]:
     """
-    Fallback explanation in case SHAP is unavailable.
-    This preserves a useful interpretation path for the user.
+    Fallback explanation when SHAP is unavailable.
+    Returns simple, investor-friendly explanations of the main risk drivers.
     """
     drivers: List[str] = []
 
@@ -394,30 +445,57 @@ def get_top_drivers_rule_based(user_inputs: Dict[str, Any]) -> List[str]:
         value = user_inputs.get(key)
         return value is not None and not pd.isna(value)
 
+    # Debt-to-Income Ratio
     if has_value("dti") and user_inputs["dti"] > 25:
-        drivers.append(f"High debt-to-income ratio ({user_inputs['dti']}%).")
-
-    if user_inputs.get("sub_grade") and user_inputs["sub_grade"][0] in ("E", "F", "G"):
-        drivers.append(f"Lower LendingClub sub-grade ({user_inputs['sub_grade']}).")
-
-    if has_value("revol_util") and user_inputs["revol_util"] > 75:
-        drivers.append(f"High revolving credit utilization ({user_inputs['revol_util']}%).")
-
-    if has_value("delinq_2yrs") and user_inputs["delinq_2yrs"] > 0:
-        drivers.append(f"{user_inputs['delinq_2yrs']} delinquency(ies) in the last two years.")
-
-    if has_value("fico_range_low") and user_inputs["fico_range_low"] < 660:
         drivers.append(
-            f"Lower FICO range ({user_inputs['fico_range_low']}-{user_inputs.get('fico_range_high', '?')})."
+            f"• **Debt-to-Income Ratio ({user_inputs['dti']:.1f}%)**\n"
+            "The borrower is using a relatively large portion of their income to repay existing debt. "
+            "A higher debt burden may make it more difficult to manage additional loan repayments, "
+            "which can increase the likelihood of default."
         )
 
+    # Loan Grade
+    if user_inputs.get("sub_grade") and user_inputs["sub_grade"][0] in ("E", "F", "G"):
+        drivers.append(
+            f"• **Loan Sub-Grade ({user_inputs['sub_grade']})**\n"
+            "This loan belongs to a lower credit-quality grade. Borrowers in these grades have historically "
+            "shown a higher probability of missing repayments, so this increases the predicted risk."
+        )
+
+    # Revolving Utilization
+    if has_value("revol_util") and user_inputs["revol_util"] > 75:
+        drivers.append(
+            f"• **Credit Utilization ({user_inputs['revol_util']:.1f}%)**\n"
+            "The borrower is using a large percentage of their available revolving credit. "
+            "High utilization can indicate financial pressure and is generally associated with higher credit risk."
+        )
+
+    # Delinquencies
+    if has_value("delinq_2yrs") and user_inputs["delinq_2yrs"] > 0:
+        drivers.append(
+            f"• **Recent Delinquencies ({int(user_inputs['delinq_2yrs'])})**\n"
+            "The borrower has had one or more delinquent payments during the last two years. "
+            "Past repayment problems are an important indicator of future repayment risk."
+        )
+
+    # FICO Score
+    if has_value("fico_range_low") and user_inputs["fico_range_low"] < 660:
+        drivers.append(
+            f"• **FICO Credit Score ({int(user_inputs['fico_range_low'])}-{int(user_inputs.get('fico_range_high', user_inputs['fico_range_low']))})**\n"
+            "The borrower's credit score is below the range typically associated with lower-risk borrowers. "
+            "Lower credit scores generally indicate a greater likelihood of default."
+        )
+
+    # No major issues
     if not drivers:
         drivers.append(
-            "No single major red flag stands out strongly in the entered fields; the result reflects the overall profile mix."
+            "• **Overall Assessment**\n"
+            "No major individual risk factor stands out based on the information provided. "
+            "The prediction is influenced by the combined effect of all borrower and loan characteristics "
+            "rather than a single dominant factor."
         )
 
     return drivers
-
 
 def build_input_summary(selected_keys: List[str], current_inputs: Dict[str, Any]) -> pd.DataFrame:
     """
@@ -460,7 +538,7 @@ def build_diagnostics_table(
     user_inputs: Dict[str, Any],
     threshold: float,
     probability: float,
-    decision: str,
+    investor_decision: str,
     risk_band: str,
 ) -> pd.DataFrame:
     """
@@ -472,10 +550,9 @@ def build_diagnostics_table(
             {"Metric": "Decision Threshold", "Value": f"{threshold:.0%}"},
             {"Metric": "Predicted Default Probability", "Value": f"{probability:.2%}"},
             {"Metric": "Risk Band", "Value": risk_band},
-            {"Metric": "Model Decision", "Value": decision},
+            {"Metric": "Investor Decision", "Value": investor_decision},
         ]
     )
-
 
 # =========================================================
 # HEADER
@@ -518,7 +595,8 @@ st.subheader("Select Information to Provide")
 
 search_query = st.text_input(
     "Search by field name or category",
-    placeholder="Examples: fico, income, utilization, delinquency, loan, credit" 
+    placeholder="Examples: Loan basics, Borrower income & employment, Debt & credit, Credit history, Delinquency history," \
+    "mortgage accounts, Recent activity, Tradeline detail, delinquency , recency detail, Bureau tradeline fields" 
 )
 
 matched_keys = search_fields_and_categories(search_query, AVAILABLE_FIELDS, FIELD_CATEGORIES)
@@ -546,27 +624,119 @@ selected_keys = st.session_state.selected_keys
 if not selected_keys:
     st.info("Select fields above to begin building a borrower and loan profile.")
 
-
 # =========================================================
 # DYNAMIC INPUT FORM
 # =========================================================
+
+# Each selected field can be in one of three states:
+#
+# 1. New
+#    - User has selected the field.
+#    - Input widget is shown.
+#    - User clicks Save.
+#
+# 2. Saved
+#    - Widget disappears.
+#    - Only the entered value is displayed.
+#    - User can click Edit.
+#
+# 3. Editing
+#    - Clicking Edit moves the field back into the input form.
+#    - User updates the value and saves again.
+# =========================================================
+
 st.subheader("Enter Borrower & Loan Information")
 
-current_keys = list(selected_keys)
 
-if current_keys:
+# ---------------------------------------------------------
+# Save a field
+# ---------------------------------------------------------
+def confirm_field(key: str) -> None:
+    """Mark a field as saved."""
+    st.session_state.confirmed_keys.add(key)
+    st.session_state.editing_keys.discard(key)
+
+
+# ---------------------------------------------------------
+# Edit a saved field
+# ---------------------------------------------------------
+def start_editing(key: str) -> None:
+    """Move a saved field back into edit mode."""
+    st.session_state.editing_keys.add(key)
+
+
+# ---------------------------------------------------------
+# Check whether a widget actually exists
+# ---------------------------------------------------------
+def is_actually_filled(key: str) -> bool:
+    """
+    Prevent stale session-state issues.
+
+    A field is considered filled only if its widget value exists
+    inside Streamlit session state.
+    """
+
+    field = AVAILABLE_FIELDS[key]
+
+    if field["type"] == "number_optional":
+        return f"blank_{key}" in st.session_state
+
+    return f"input_{key}" in st.session_state
+
+
+# ---------------------------------------------------------
+# Decide which fields belong in which section
+# ---------------------------------------------------------
+
+saved_keys = [
+    key
+    for key in selected_keys
+    if key in st.session_state.confirmed_keys
+    and key not in st.session_state.editing_keys
+    and is_actually_filled(key)
+]
+
+editing_keys = [
+    key
+    for key in selected_keys
+    if key not in saved_keys
+]
+
+
+# =========================================================
+# INPUT WIDGETS
+# =========================================================
+
+if editing_keys:
+
     input_columns = st.columns(3)
 
-    for i, key in enumerate(current_keys):
+    for i, key in enumerate(editing_keys):
+
         field = AVAILABLE_FIELDS[key]
-        prefill = st.session_state.user_inputs.get(key, field.get("default"))
+
+        prefill = st.session_state.user_inputs.get(
+            key,
+            field.get("default")
+        )
+
         help_text = format_feature_help(
-    FEATURE_EXPLANATIONS.get(key, "No explanation available yet.")
-)
+            FEATURE_EXPLANATIONS.get(
+                key,
+                "No explanation available yet."
+            )
+        )
+
         with input_columns[i % 3]:
+
+            # ---------------- Number ----------------
             if field["type"] == "number":
-                has_prefill = prefill is not None and not pd.isna(prefill)
-                default_value = float(prefill) if has_prefill else float(field["default"])
+
+                default_value = (
+                    float(prefill)
+                    if prefill is not None and not pd.isna(prefill)
+                    else float(field["default"])
+                )
 
                 st.number_input(
                     field["label"],
@@ -578,9 +748,16 @@ if current_keys:
                     help=help_text,
                 )
 
+            # ---------------- Select ----------------
             elif field["type"] == "select":
+
                 options = field["options"]
-                index = options.index(prefill) if prefill in options else 0
+
+                index = (
+                    options.index(prefill)
+                    if prefill in options
+                    else 0
+                )
 
                 st.selectbox(
                     field["label"],
@@ -590,7 +767,9 @@ if current_keys:
                     help=help_text,
                 )
 
+            # ---------------- Optional Number ----------------
             elif field["type"] == "number_optional":
+
                 blank_key = f"blank_{key}"
                 input_key = f"input_{key}"
 
@@ -604,9 +783,12 @@ if current_keys:
                 )
 
                 if not left_blank:
-                    fallback_value = field.get("default", field["min"])
-                    has_prefill = prefill is not None and not pd.isna(prefill)
-                    numeric_value = prefill if has_prefill else fallback_value
+
+                    numeric_value = (
+                        prefill
+                        if prefill is not None and not pd.isna(prefill)
+                        else field.get("default", field["min"])
+                    )
 
                     st.number_input(
                         field["label"],
@@ -617,20 +799,123 @@ if current_keys:
                         key=input_key,
                         help=help_text,
                     )
-else:
-    st.info("Choose fields above, then enter the available borrower and loan information.")
-
+    # ==========================================
+    # Save all entered fields together
+    # ==========================================
+    if st.button("💾 Save Inputs", use_container_width=True,):
+        for key in editing_keys:
+            confirm_field(key)
+        st.session_state.user_inputs = gather_user_inputs(selected_keys)
+        st.rerun()
 
 # =========================================================
-# INPUT SUMMARY
+# EMPTY STATE
 # =========================================================
+
+if not editing_keys and not saved_keys:
+
+    st.info(
+        "Select fields above to begin entering borrower information."
+    )
+
+# =========================================================
+# CURRENT INPUT SUMMARY
+# =========================================================
+
+confirmed_keys_list = [
+    key for key in selected_keys
+    if key in st.session_state.confirmed_keys
+    and is_actually_filled(key)
+]
+
 current_inputs = gather_user_inputs(selected_keys)
 
-if selected_keys:
-    st.subheader("Current Input Summary")
-    summary_df = build_input_summary(selected_keys, current_inputs)
-    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+if confirmed_keys_list:
 
+    st.subheader("Current Input Summary")
+
+    # Table header
+    col1, col2, col3 = st.columns([2, 2, 1])
+
+    with col1:
+        st.markdown("**Field**")
+
+    with col2:
+        st.markdown("**Value**")
+
+    with col3:
+        st.markdown("**Action**")
+
+    for key in confirmed_keys_list:
+
+        field = AVAILABLE_FIELDS[key]
+
+        # If user clicked edit
+        if key in st.session_state.editing_keys:
+
+            col1, col2, col3 = st.columns([2, 2, 1])
+
+            with col1:
+                st.write(field["label"])
+
+            with col2:
+
+                if field["type"] == "number":
+
+                    st.number_input(
+                        field["label"],
+                        min_value=float(field["min"]),
+                        max_value=float(field["max"]),
+                        key=f"summary_edit_{key}"
+                    )
+
+                elif field["type"] == "select":
+
+                    st.selectbox(
+                        field["label"],
+                        options=field["options"],
+                        key=f"summary_edit_{key}"
+                    )
+
+            with col3:
+
+                if st.button(
+                    "💾 Save",
+                    key=f"save_summary_{key}"
+                ):
+
+                    new_value = st.session_state[f"summary_edit_{key}"]
+
+                    st.session_state.user_inputs[key] = new_value
+
+                    st.session_state.editing_keys.remove(key)
+
+                    st.session_state.confirmed_keys.add(key)
+
+                    st.rerun()
+
+        else:
+
+            value = current_inputs.get(key)
+
+            col1, col2, col3 = st.columns([2, 2, 1])
+
+            with col1:
+                st.write(field["label"])
+
+            with col2:
+                st.write(
+                    "—" if value is None else value
+                )
+
+            with col3:
+
+                if st.button(
+                    "✏️ Edit",
+                    key=f"edit_summary_{key}"
+                ):
+                    st.session_state.editing_keys.add(key)
+                    st.rerun()
 
 # =========================================================
 # THRESHOLD SECTION (INVESTOR PREFERENCE)
@@ -641,34 +926,29 @@ st.subheader("Investment Safety Preference")
 threshold = st.slider(
     "How much borrower risk are you comfortable accepting?",
     min_value=0.00,
-    max_value=1.00,
+    max_value=0.50,
     value=DEFAULT_RISK_THRESHOLD,
     step=0.01,
 )
+strategy, message, message_type = get_threshold_guidance(threshold)
 
 st.caption(
-    f"Your selected preference: {threshold:.0%} maximum acceptable chance of loan failure."
+    f"Current setting: **{strategy}** "
+    f"({threshold:.0%} maximum predicted chance of default)"
 )
 
-if threshold <= 0.15:
-    st.info(
-        "Very cautious approach: Only the safest borrower profiles will be recommended."
-    )
+if message_type == "success":
+    st.success(message)
 
-elif threshold <= 0.25:
-    st.info(
-        "Balanced approach: Accepts some risk while still focusing on safer borrowers."
-    )
+elif message_type == "info":
+    st.info(message)
 
-elif threshold <= 0.40:
-    st.warning(
-        "Higher return approach: More borrowers may qualify, but there is increased risk of loss."
-    )
+elif message_type == "warning":
+    st.warning(message)
 
 else:
-    st.error(
-        "High-risk approach: More approvals are possible, but potential losses can be significant."
-    )
+    st.error(message)
+
 
 # =========================================================
 # APP CONTROLS
@@ -701,40 +981,43 @@ if st.button("Analyze Loan Application", disabled=(len(selected_keys) == 0), use
         result = predict_default_probability(raw_row, threshold=threshold)
 
         probability = result["default_probability"].iloc[0]
-        decision = result["decision"].iloc[0]
 
         risk_band, risk_emoji = get_risk_band(probability)
-        investor_decision = get_investor_decision_text(risk_band)
 
-        screen_status = ("Recommended - Below selected risk threshold" if probability < threshold else "Not Recommended - Above selected risk threshold")
-        
+        investor_decision = get_investor_decision_text(probability, threshold)
+
+        screen_status = (
+            "Within Risk Limit"
+            if probability < threshold
+            else "Above Risk Limit"
+        )
+
         profit_info = estimate_profit_loss(user_inputs, probability)
-        case_result_message = get_case_result_message(probability=probability, threshold=threshold, risk_band=risk_band,)
+
+        message_type, case_result_message = get_case_result_message(probability, threshold, risk_band,)
+
 
         # =====================================================
         # PRIMARY RESULT METRICS
         # =====================================================
         st.subheader("Risk Evaluation Results")
 
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        metric_col1, metric_col2, metric_col3 = st.columns(3)
 
-        metric_col1.metric("Predicted Default Probability", f"{probability:.1%}")
-
-        metric_col2.metric("Risk Category", f"{risk_emoji} {risk_band}")
-
-        metric_col3.metric("Investor Screen", investor_decision)
-
-        metric_col4.metric("Threshold Decision", screen_status)
+        with metric_col1:
+            st.metric("Predicted Default Probability", f"{probability:.1%}",)
+        with metric_col2:
+            st.metric("Borrower Risk Level", f"{risk_emoji} {risk_band}",)
+        with metric_col3:
+            st.metric("Investor Decision", investor_decision,)
 
         # =====================================================
         # DECISION INTERPRETATION
         # =====================================================
-        if risk_band in ["High", "Very High"]:
-            st.warning(case_result_message)
-        elif risk_band == "Moderate":
-            st.info(case_result_message)
-        else:
+        if message_type == "success":
             st.success(case_result_message)
+        else:
+            st.warning(case_result_message)
 
         # =====================================================
         # EXPECTED VALUE SECTION
@@ -759,6 +1042,27 @@ if st.button("Analyze Loan Application", disabled=(len(selected_keys) == 0), use
         artifacts = load_artifacts()
         X_transformed = transform(raw_row, artifacts=artifacts)
 
+        if show_debug:
+            with st.expander("Debug: Look for suspicious string/array values in X_transformed"):
+                import re
+                suspicious = []
+                for col in X_transformed.columns:
+                    val = X_transformed[col].iloc[0]
+                    dtype = X_transformed[col].dtype
+                    if isinstance(val, str) and re.match(r"^\[.*\]$", val.strip()):
+                        suspicious.append((col, repr(val), dtype))
+                    elif dtype == object:
+                        suspicious.append((col, repr(val), dtype))
+
+                if suspicious:
+                    st.error("Found suspicious string/object-typed columns:")
+                    st.write(suspicious)
+                else:
+                    st.success("No suspicious string/object values found in row 0.")
+
+                st.write("All column dtypes:")
+                st.write(X_transformed.dtypes)
+
         try:
             explainer = load_shap_explainer()
             shap_df = get_shap_explanation(X_transformed, explainer)
@@ -780,8 +1084,9 @@ if st.button("Analyze Loan Application", disabled=(len(selected_keys) == 0), use
 
         except Exception as exc:
             st.info(
-        "Detailed SHAP output is unavailable. Showing rule-based explanation instead."
-    )
+        "Detailed SHAP output is unavailable. Showing rule-based explanation instead.")
+            import traceback
+            st.code(traceback.format_exc())
 
             if show_debug:
                 st.warning(f"SHAP Debug: {exc}")
@@ -799,7 +1104,7 @@ if st.button("Analyze Loan Application", disabled=(len(selected_keys) == 0), use
                 user_inputs=user_inputs,
                 threshold=threshold,
                 probability=probability,
-                decision=decision,
+                investor_decision=investor_decision,
                 risk_band=risk_band,
             )
             st.dataframe(diagnostics_df, use_container_width=True, hide_index=True)
@@ -813,3 +1118,5 @@ if st.button("Analyze Loan Application", disabled=(len(selected_keys) == 0), use
         st.error(f"Prediction error: {exc}")
     except Exception as exc:
         st.error(f"Unexpected application error: {exc}")
+
+
