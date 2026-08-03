@@ -113,6 +113,7 @@ def initialize_session_state() -> None:
         "user_inputs": {},
         "editing_keys": set(),     # fields the user has reopened for editing
         "confirmed_keys": set(),   # fields the user has explicitly saved
+        "summary_editing_keys": set(),  # fields being edited INLINE in the summary table
     }
 
     for key, value in defaults.items():
@@ -182,26 +183,28 @@ def search_fields_and_categories(
 
     return ordered
 
-
 def add_selected_fields_from_picker() -> None:
     """
-    Replace selected fields with current picker selection.
+    Add only newly selected fields from the picker.
+    Already-saved fields stay saved and should not reopen in the input form.
+    Newly added fields open in edit mode.
     """
-    selected_keys = []
+    current_selected = list(st.session_state.selected_keys)
+    current_set = set(current_selected)
 
+    new_keys = []
     for label in st.session_state.field_picker_labels:
         key = ALL_LABEL_TO_KEY.get(label)
-        if key is not None:
-            selected_keys.append(key)
+        if key is not None and key not in current_set:
+            new_keys.append(key)
 
-    st.session_state.selected_keys = selected_keys
+    st.session_state.selected_keys = current_selected + new_keys
 
-    # Reset save/edit states
-    st.session_state.confirmed_keys = set()
-    st.session_state.editing_keys = set()
+    for key in new_keys:
+        st.session_state.editing_keys.add(key)
+        st.session_state.confirmed_keys.discard(key)
 
     st.session_state.field_picker_labels = []
-
 
 def clear_all_selected_fields() -> None:
     """
@@ -580,7 +583,7 @@ with st.container(border=True):
 
     search_query = st.text_input(
         "Search by field name or category",
-        placeholder="e.g. Loan, Income & Employment, Credit, Delinquency...",
+        placeholder="e.g. Loan, Income & Employment, Credit, Delinquency, Recent, Months...",
     )
 
     matched_keys = search_fields_and_categories(search_query, AVAILABLE_FIELDS, FIELD_CATEGORIES)
@@ -600,6 +603,7 @@ with st.container(border=True):
     selector_col1, selector_col2 = st.columns(2)
     with selector_col1:
         st.button("➕ Add fields", on_click=add_selected_fields_from_picker, use_container_width=True)
+
     with selector_col2:
         st.button("🗑️ Clear all fields", on_click=clear_all_selected_fields, use_container_width=True)
 
@@ -616,6 +620,7 @@ st.write("")
 # =========================================================
 # DYNAMIC INPUT FORM
 # =========================================================
+# (unchanged — exactly as you had it)
 
 def confirm_field(key: str) -> None:
     """Mark a field as saved."""
@@ -629,11 +634,6 @@ def start_editing(key: str) -> None:
 
 
 def is_actually_filled(key: str) -> bool:
-    """
-    Prevent stale session-state issues.
-    A field is considered filled only if its widget value exists
-    inside Streamlit session state.
-    """
     field = AVAILABLE_FIELDS[key]
     if field["type"] == "number_optional":
         return f"blank_{key}" in st.session_state
@@ -648,7 +648,12 @@ saved_keys = [
     and is_actually_filled(key)
 ]
 
-editing_keys = [key for key in selected_keys if key not in saved_keys]
+editing_keys = [
+    key
+    for key in selected_keys
+    if key not in st.session_state.confirmed_keys
+    or key in st.session_state.editing_keys
+]
 
 if selected_keys:
     with st.container(border=True):
@@ -758,7 +763,7 @@ if confirmed_keys_list:
         for key in confirmed_keys_list:
             field = AVAILABLE_FIELDS[key]
 
-            if key in st.session_state.editing_keys:
+            if key in st.session_state.summary_editing_keys:  
                 col1, col2, col3 = st.columns([2, 2, 1])
 
                 with col1:
@@ -766,27 +771,53 @@ if confirmed_keys_list:
 
                 with col2:
                     if field["type"] == "number":
+                        current_value = current_inputs.get(key)
+                        prefill = float(current_value) if current_value is not None else float(field["default"])
                         st.number_input(
                             field["label"],
                             min_value=float(field["min"]),
                             max_value=float(field["max"]),
+                            value=prefill,
                             key=f"summary_edit_{key}",
                             label_visibility="collapsed",
                         )
                     elif field["type"] == "select":
+                        current_value = current_inputs.get(key)
+                        options = field["options"]
+                        index = options.index(current_value) if current_value in options else 0
                         st.selectbox(
                             field["label"],
-                            options=field["options"],
+                            options=options,
+                            index=index,
                             key=f"summary_edit_{key}",
                             label_visibility="collapsed",
                         )
+                    elif field["type"] == "number_optional":                 # <-- ADDED: was missing
+                        current_value = current_inputs.get(key)
+                        blank_now = st.checkbox(
+                            "Never happened / unknown",
+                            value=(current_value is None),
+                            key=f"summary_edit_blank_{key}",
+                        )
+                        if not blank_now:
+                            prefill = float(current_value) if current_value is not None else float(field["min"])
+                            st.number_input(
+                                field["label"],
+                                min_value=float(field["min"]),
+                                max_value=float(field["max"]),
+                                value=prefill,
+                                key=f"summary_edit_{key}",
+                                label_visibility="collapsed",
+                            )
 
                 with col3:
                     if st.button("💾 Save", key=f"save_summary_{key}", use_container_width=True):
-                        new_value = st.session_state[f"summary_edit_{key}"]
+                        if field["type"] == "number_optional" and st.session_state.get(f"summary_edit_blank_{key}"):
+                            new_value = None
+                        else:
+                            new_value = st.session_state.get(f"summary_edit_{key}")
                         st.session_state.user_inputs[key] = new_value
-                        st.session_state.editing_keys.remove(key)
-                        st.session_state.confirmed_keys.add(key)
+                        st.session_state.summary_editing_keys.discard(key)   
                         st.rerun()
 
             else:
@@ -799,11 +830,16 @@ if confirmed_keys_list:
                     st.write("—" if value is None else value)
                 with col3:
                     if st.button("✏️ Edit", key=f"edit_summary_{key}", use_container_width=True):
-                        st.session_state.editing_keys.add(key)
+                        st.session_state.summary_editing_keys.add(key)   
                         st.rerun()
 
-st.write("")
+        st.divider()
+        st.markdown(
+            f"**📊 {len(selected_keys)} of {len(AVAILABLE_FIELDS)} fields selected so far "
+    f"({len(selected_keys)/len(AVAILABLE_FIELDS):.0%} of full profile)**"
+)
 
+st.write("")
 
 # =========================================================
 # THRESHOLD SECTION (INVESTOR PREFERENCE)
