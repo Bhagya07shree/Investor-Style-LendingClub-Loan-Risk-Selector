@@ -42,7 +42,7 @@ Documented here because each reflects a real class of bug worth knowing about if
 - **Fields silently becoming uneditable:** an earlier version of the Save/Edit logic excluded any field already present in `user_inputs` from getting an input widget — which meant fields pre-filled by an example profile lost their editable widgets entirely. Fixed by always rendering a widget for every currently selected field, and gating "saved" status on an explicit user action (clicking Save) rather than incidental session-state presence.
 - **`TypeError: unhashable type: 'list'`:** a batch "Save Inputs" button attempted to pass a list of keys into a function designed to confirm one key at a time. Fixed by looping over the list and calling the single-key function per iteration.
 - **SHAP/XGBoost version incompatibility:** `shap.TreeExplainer` failed with `ValueError: could not convert string to float: '[5E-1]'`. Root cause: newer XGBoost versions can serialize the model's `base_score` as a bracketed string (`"[5E-1]"`), which older `shap` versions can't parse. Resolved by upgrading `shap` (preferred), with a manual config-patching workaround available as a fallback if the version can't be changed.
-- **Unrealistic input ranges:** several numeric fields (e.g., `annual_inc`, `tot_cur_bal`, `max_bal_bc`) originally allowed unrealistically high maximums (up to $2,000,000+) inherited loosely from the training data's extreme tail. Tightened to reasonable retail-borrower ceilings so the input form reflects realistic loan applications rather than dataset outliers.
+
 
 ---
 
@@ -53,4 +53,3 @@ See [`known_limitations.md`](known_limitations.md) for the full, consolidated li
 - The model's **raw, uncalibrated probabilities should never be used directly** — only the calibrated output is meaningful as an actual probability (see `04_calibration.md`).
 - **~0.71–0.73 AUC is the practical ceiling** for this dataset across every configuration tested — the app should be framed as a decision-support tool, not a precise risk score.
 - **Bureau tradeline fields carry no real signal for loans issued before ~2015** due to LendingClub's own reporting history (see `05_feature_drift_analysis.md`) — a live application wouldn't have this limitation, but it's a structural artifact of the historical training data.
-- **The app is for educational/portfolio purposes only** — it is not a production credit-risk system and should not inform real lending or investment decisions.
