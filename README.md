@@ -41,22 +41,22 @@ Users can enter borrower and loan details, get a calibrated default risk score, 
 
 ## 📂 Project Structure
 
-LendingClub_End_to_End_ML/
-├─ app.py # Streamlit app
-├─ available_fields_and_field_categories.py # Input field definitions
-├─ feature_explanations.py # Help text for input fields
-├─ src/
-│ ├─ artifacts/ # Fitted preprocessing objects
-│ ├─ models/ # Trained models (raw + calibrated)
-│ └─ pipeline/
-│ ├─ preprocess.py # Shared transformation logic
-│ ├─ train.py # End-to-end training script
-│ ├─ predict.py # Inference entry point
-│ └─ monitor_drift.py # Drift monitoring (PSI)
-├─ notebooks/ # Exploratory analysis
-├─ reports/ # Full technical documentation
-├─ tests/ # Smoke tests
-└─ requirements.txt
+LendingClub_End_to_End_ML/ <br>
+├─ app.py # Streamlit app  <br>
+├─ available_fields_and_field_categories.py # Input field definitions  <br>
+├─ feature_explanations.py # Help text for input fields  <br>
+├─ src/  <br>
+│ ├─ artifacts/ # Fitted preprocessing objects <br>
+│ ├─ models/ # Trained models (raw + calibrated) <br>
+│ └─ pipeline/ <br>
+│ ├─ preprocess.py # Shared transformation logic <br>
+│ ├─ train.py # End-to-end training script <br>
+│ ├─ predict.py # Inference entry point <br>
+│ └─ monitor_drift.py # Drift monitoring (PSI) <br>
+├─ notebooks/ # Exploratory analysis <br>
+├─ reports/ # Full technical documentation <br>
+├─ tests/ # Smoke tests <br>
+└─ requirements.txt <br>
 
 ---
 
@@ -123,11 +123,11 @@ For issues encountered and fixed during deployment (Streamlit state bugs, a SHAP
 ## 🚀 How to Run Locally
 
 ```bash
-git clone https://github.com/<your-username>/LendingClub_End_to_End_ML.git
-cd LendingClub_End_to_End_ML
+git clone https://github.com/Bhagya07shree/Investor-Style-LendingClub-Loan-Risk-Selector.git
+cd Investor-Style-LendingClub-Loan-Risk-Selector
 
 python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
+source .venv\Scripts\activate     
 
 pip install -r requirements.txt
 streamlit run app.py
