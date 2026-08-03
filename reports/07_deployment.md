@@ -48,7 +48,7 @@ Documented here because each reflects a real class of bug worth knowing about if
 
 ## 4. Known Limitations
 
-See [`known_limitations.md`](known-limitations.md) for the full, consolidated list. Most relevant to deployment specifically:
+See [`know-limitations.md`](known-limitations.md) for the full, consolidated list. Most relevant to deployment specifically:
 
 - The model's **raw, uncalibrated probabilities should never be used directly** — only the calibrated output is meaningful as an actual probability (see `04_calibration.md`).
 - **~0.71–0.73 AUC is the practical ceiling** for this dataset across every configuration tested — the app should be framed as a decision-support tool, not a precise risk score.
